@@ -31,7 +31,6 @@ import java.util.Map;
 public interface OffsetManager
 {
 
-
   /**
    * 
    * Load initial offsets for all kafka partition

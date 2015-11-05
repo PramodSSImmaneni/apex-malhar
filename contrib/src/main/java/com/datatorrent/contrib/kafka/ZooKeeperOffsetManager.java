@@ -1,0 +1,123 @@
+package com.datatorrent.contrib.kafka;
+
+import com.beust.jcommander.internal.Maps;
+import com.datatorrent.netlet.util.DTThrowable;
+import com.google.common.collect.Lists;
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.ZooKeeper;
+import org.apache.zookeeper.data.Stat;
+import org.elasticsearch.common.primitives.Longs;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.validation.constraints.NotNull;
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Created by pramod on 11/5/15.
+ */
+public class ZooKeeperOffsetManager implements OffsetManager {
+
+    private static final Logger logger = LoggerFactory.getLogger(ZooKeeperOffsetManager.class);
+
+    @NotNull
+    private String connectString;
+    private int sessionTimeout = 30000;
+
+    @NotNull
+    private String parentPath = "/";
+
+    private ZooKeeperWatcher zooKeeperWatcher;
+
+    private transient ZooKeeper zooKeeper;
+
+    @Override
+    public Map<KafkaPartition, Long> loadInitialOffsets() {
+        if (zooKeeper == null) {
+            try {
+                zooKeeperWatcher = new ZooKeeperWatcher();
+                zooKeeper = new ZooKeeper(connectString, sessionTimeout, zooKeeperWatcher);
+            } catch (IOException e) {
+                DTThrowable.rethrow(e);
+            }
+        }
+        Map<KafkaPartition, Long> offsetsOfPartitions = Maps.newHashMap();
+        try {
+            List<String> descriptors = Lists.newArrayList();
+            populateOffsets(parentPath, descriptors, offsetsOfPartitions);
+        } catch (Exception e) {
+           DTThrowable.rethrow(e);
+        }
+        return offsetsOfPartitions;
+    }
+
+    @Override
+    public void updateOffsets(Map<KafkaPartition, Long> offsetsOfPartitions) {
+        for (Map.Entry<KafkaPartition, Long> offsetOfPartition : offsetsOfPartitions.entrySet()) {
+            String path = getPath(offsetOfPartition.getKey());
+            try {
+                zooKeeper.setData(path, Longs.toByteArray(offsetOfPartition.getValue()), -1);
+            } catch (KeeperException e) {
+                logger.error("Error storing offset {}", e);
+            } catch (InterruptedException e) {
+                logger.error("Error storing offset {}", e);
+            }
+        }
+    }
+
+    private void populateOffsets(String path, List<String> descriptors, Map<KafkaPartition, Long> offsetsOfPartitions) throws KeeperException, InterruptedException {
+        List<String> children = zooKeeper.getChildren(path, false);
+        for (String child : children) {
+            String childPath = parentPath + "/" + child;
+            if (descriptors.size() == 2) {
+                KafkaPartition kafkaPartition = new KafkaPartition(descriptors.get(0), descriptors.get(1), Integer.valueOf(child));
+                byte[] boffset = zooKeeper.getData(childPath, false, new Stat());
+                offsetsOfPartitions.put(kafkaPartition, Longs.fromByteArray(boffset));
+            }
+        }
+    }
+
+    private String getPath(KafkaPartition kafkaPartition) {
+        StringBuilder sb = new StringBuilder(parentPath);
+        sb.append("/").append(kafkaPartition.getClusterId());
+        sb.append("/").append(kafkaPartition.getTopic());
+        sb.append("/").append(kafkaPartition.getPartitionId());
+        return sb.toString();
+    }
+
+    private class ZooKeeperWatcher implements Watcher {
+
+        @Override
+        public void process(WatchedEvent watchedEvent) {
+            logger.info("Event : {}", watchedEvent);
+        }
+    }
+
+    public String getConnectString() {
+        return connectString;
+    }
+
+    public void setConnectString(String connectString) {
+        this.connectString = connectString;
+    }
+
+    public int getSessionTimeout() {
+        return sessionTimeout;
+    }
+
+    public void setSessionTimeout(int sessionTimeout) {
+        this.sessionTimeout = sessionTimeout;
+    }
+
+    public String getParentPath() {
+        return parentPath;
+    }
+
+    public void setParentPath(String parentPath) {
+        this.parentPath = parentPath;
+    }
+}
