@@ -3,10 +3,7 @@ package com.datatorrent.contrib.kafka;
 import com.beust.jcommander.internal.Maps;
 import com.datatorrent.netlet.util.DTThrowable;
 import com.google.common.collect.Lists;
-import org.apache.zookeeper.KeeperException;
-import org.apache.zookeeper.WatchedEvent;
-import org.apache.zookeeper.Watcher;
-import org.apache.zookeeper.ZooKeeper;
+import org.apache.zookeeper.*;
 import org.apache.zookeeper.data.Stat;
 import org.elasticsearch.common.primitives.Longs;
 import org.slf4j.Logger;
@@ -29,7 +26,7 @@ public class ZooKeeperOffsetManager implements OffsetManager {
     private int sessionTimeout = 30000;
 
     @NotNull
-    private String parentPath = "/";
+    private String parentPath = "";
 
     private ZooKeeperWatcher zooKeeperWatcher;
 
@@ -37,18 +34,11 @@ public class ZooKeeperOffsetManager implements OffsetManager {
 
     @Override
     public Map<KafkaPartition, Long> loadInitialOffsets() {
-        if (zooKeeper == null) {
-            try {
-                zooKeeperWatcher = new ZooKeeperWatcher();
-                zooKeeper = new ZooKeeper(connectString, sessionTimeout, zooKeeperWatcher);
-            } catch (IOException e) {
-                DTThrowable.rethrow(e);
-            }
-        }
+        chkInitZooKeeper();
         Map<KafkaPartition, Long> offsetsOfPartitions = Maps.newHashMap();
         try {
             List<String> descriptors = Lists.newArrayList();
-            populateOffsets(parentPath, descriptors, offsetsOfPartitions);
+            populateOffsets(parentPath + "/", descriptors, offsetsOfPartitions);
         } catch (Exception e) {
            DTThrowable.rethrow(e);
         }
@@ -57,9 +47,10 @@ public class ZooKeeperOffsetManager implements OffsetManager {
 
     @Override
     public void updateOffsets(Map<KafkaPartition, Long> offsetsOfPartitions) {
+        chkInitZooKeeper();
         for (Map.Entry<KafkaPartition, Long> offsetOfPartition : offsetsOfPartitions.entrySet()) {
-            String path = getPath(offsetOfPartition.getKey());
             try {
+                String path = chkCreatePath(offsetOfPartition.getKey());
                 zooKeeper.setData(path, Longs.toByteArray(offsetOfPartition.getValue()), -1);
             } catch (KeeperException e) {
                 logger.error("Error storing offset {}", e);
@@ -72,21 +63,47 @@ public class ZooKeeperOffsetManager implements OffsetManager {
     private void populateOffsets(String path, List<String> descriptors, Map<KafkaPartition, Long> offsetsOfPartitions) throws KeeperException, InterruptedException {
         List<String> children = zooKeeper.getChildren(path, false);
         for (String child : children) {
-            String childPath = parentPath + "/" + child;
+            String childPath = path + "/" + child;
+            if (path.equals("/")) {
+                childPath = path + child;
+            }
             if (descriptors.size() == 2) {
                 KafkaPartition kafkaPartition = new KafkaPartition(descriptors.get(0), descriptors.get(1), Integer.valueOf(child));
                 byte[] boffset = zooKeeper.getData(childPath, false, new Stat());
                 offsetsOfPartitions.put(kafkaPartition, Longs.fromByteArray(boffset));
+            } else {
+                descriptors.add(child);
+                populateOffsets(childPath, descriptors, offsetsOfPartitions);
+                descriptors.remove(descriptors.size() - 1);
             }
         }
     }
 
-    private String getPath(KafkaPartition kafkaPartition) {
+    private void chkInitZooKeeper() {
+        if (zooKeeper == null) {
+            try {
+                zooKeeperWatcher = new ZooKeeperWatcher();
+                zooKeeper = new ZooKeeper(connectString, sessionTimeout, zooKeeperWatcher);
+            } catch (IOException e) {
+                DTThrowable.rethrow(e);
+            }
+        }
+    }
+
+    private String chkCreatePath(KafkaPartition kafkaPartition) throws KeeperException, InterruptedException {
         StringBuilder sb = new StringBuilder(parentPath);
-        sb.append("/").append(kafkaPartition.getClusterId());
-        sb.append("/").append(kafkaPartition.getTopic());
-        sb.append("/").append(kafkaPartition.getPartitionId());
+        chkCreatePath(sb, kafkaPartition.getClusterId());
+        chkCreatePath(sb, kafkaPartition.getTopic());
+        chkCreatePath(sb, "" + kafkaPartition.getPartitionId());
         return sb.toString();
+    }
+
+    private void chkCreatePath(StringBuilder pathBuilder, String element) throws KeeperException, InterruptedException {
+        pathBuilder.append("/").append(element);
+        String path = pathBuilder.toString();
+        if (zooKeeper.exists(path, false) == null) {
+            zooKeeper.create(path, null, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+        }
     }
 
     private class ZooKeeperWatcher implements Watcher {
