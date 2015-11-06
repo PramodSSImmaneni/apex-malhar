@@ -1,23 +1,21 @@
 package com.datatorrent.contrib.kafka;
 
 import com.datatorrent.netlet.util.DTThrowable;
-import kafka.server.KafkaConfig;
 import kafka.server.KafkaServer;
 import kafka.utils.Time;
 import org.apache.commons.io.FileUtils;
-import org.apache.zookeeper.server.NIOServerCnxnFactory;
 import org.apache.zookeeper.server.ServerCnxnFactory;
 import org.apache.zookeeper.server.ZooKeeperServer;
-import org.junit.After;
-import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExternalResource;
 import org.junit.rules.TestName;
+import org.junit.rules.TestWatcher;
 import org.junit.runner.Description;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.Properties;
 
 /**
  * Created by pramod on 11/5/15.
@@ -28,7 +26,7 @@ public class ZooKeeperOffsetManagerTest {
     private int numBrokers = 5;
     private int startPort = 20000;
 
-    private File testDir;
+    private static File testDir;
     private File workDir;
 
     private ServerCnxnFactory cnxnFactory;
@@ -36,10 +34,11 @@ public class ZooKeeperOffsetManagerTest {
 
     private KafkaServer[] kafkaServers;
 
-    @Rule
-    public TestName name = new TestName() {
+    @ClassRule
+    public static TestWatcher className = new TestWatcher() {
         @Override
         protected void starting(Description d) {
+            System.out.println("classname " + d.getClassName());
             testDir = new File("target", d.getClassName());
             testDir.mkdir();
         }
@@ -54,48 +53,76 @@ public class ZooKeeperOffsetManagerTest {
         }
     };
 
-    @Before
-    public void setupEnv() throws IOException, InterruptedException {
-        workDir = new File(testDir, name.getMethodName());
-
-        cnxnFactory = NIOServerCnxnFactory.createFactory(zkPort, 6);
-        File zkSnapshotDir = new File(workDir, "zksnaps");
-        File zkLogDir = new File(workDir, "zklogs");
-        zooKeeperServer = new ZooKeeperServer(zkSnapshotDir, zkLogDir, 500);
-        cnxnFactory.startup(zooKeeperServer);
-
-        String zooKeeperAddress = "localhost:" + zkPort;
-
-        kafkaServers = new KafkaServer[numBrokers];
-        for (int i = 0; i < numBrokers; ++i) {
-            File kafkaLogDir = new File(workDir, "kafkalogs-" + i);
-            Properties properties = new Properties();
-            properties.setProperty("broker.id", "broker-" + i);
-            properties.setProperty("host.name", "localhost");
-            properties.setProperty("port", "" + (startPort + i));
-            properties.setProperty("zookeeper.connect", zooKeeperAddress);
-            properties.setProperty("log.dir", kafkaLogDir.getAbsolutePath());
-            KafkaConfig kafkaConfig = new KafkaConfig(properties);
-            KafkaServer kafkaServer = new KafkaServer(kafkaConfig, new KafkaTime());
-            kafkaServers[i] = kafkaServer;
-            kafkaServer.startup();
+    @Rule
+    public TestName name = new TestName() {
+        @Override
+        protected void starting(Description d) {
+            workDir = new File(testDir, d.getMethodName());
+            System.out.println("methodname " + d.getMethodName());
         }
-    }
 
-    @After
-    public void takedownEnv() throws IOException {
-        for (KafkaServer kafkaServer : kafkaServers) {
-            kafkaServer.shutdown();
+        @Override
+        protected void finished(Description description) {
+            FileUtils.deleteQuietly(workDir);
         }
-        cnxnFactory.shutdown();
-        FileUtils.deleteDirectory(workDir);
-    }
+    };
+
+    @Rule
+    public ExternalResource externalResource = new ExternalResource() {
+        @Override
+        protected void before() throws Throwable {
+            System.out.println(3);
+            /*
+            cnxnFactory = NIOServerCnxnFactory.createFactory(zkPort, 6);
+            File zkSnapshotDir = new File(workDir, "zksnaps");
+            File zkLogDir = new File(workDir, "zklogs");
+            zooKeeperServer = new ZooKeeperServer(zkSnapshotDir, zkLogDir, 500);
+            cnxnFactory.startup(zooKeeperServer);
+
+            String zooKeeperAddress = "localhost:" + zkPort;
+
+            kafkaServers = new KafkaServer[numBrokers];
+            for (int i = 0; i < numBrokers; ++i) {
+                File kafkaLogDir = new File(workDir, "kafkalogs-" + i);
+                Properties properties = new Properties();
+                properties.setProperty("broker.id", "" + (i + 1));
+                properties.setProperty("host.name", "localhost");
+                properties.setProperty("port", "" + (startPort + i));
+                properties.setProperty("zookeeper.connect", zooKeeperAddress);
+                properties.setProperty("log.dir", kafkaLogDir.getAbsolutePath());
+                KafkaConfig kafkaConfig = new KafkaConfig(properties);
+                KafkaServer kafkaServer = new KafkaServer(kafkaConfig, new KafkaTime());
+                kafkaServers[i] = kafkaServer;
+                kafkaServer.startup();
+            }
+            */
+        }
+
+        @Override
+        protected void after() {
+            /*
+            for (KafkaServer kafkaServer : kafkaServers) {
+                kafkaServer.shutdown();
+            }
+            cnxnFactory.shutdown();
+            */
+        }
+    };
 
     @Test
     public void testComponent() throws InterruptedException {
+        System.out.println("a");
         //KafkaServer kafkaServer = new KafkaServer();
         Thread.sleep(2000);
     }
+
+    @Test
+    public void testComponent2() throws InterruptedException {
+        System.out.println("b");
+        //KafkaServer kafkaServer = new KafkaServer();
+        Thread.sleep(2000);
+    }
+
 
     private class KafkaTime implements Time {
 
