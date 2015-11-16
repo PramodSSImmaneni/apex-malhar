@@ -79,7 +79,7 @@ public class ZooKeeperOffsetManager implements OffsetManager {
     }
 
     private void populateOffsets(String path, List<String> descriptors, Map<KafkaPartition, Long> offsetsOfPartitions) throws KeeperException, InterruptedException {
-        List<String> children = zooKeeper.getChildren(path.equals(parentPath) ? "/" : path, false);
+        List<String> children = zooKeeper.getChildren(path.equals("") ? "/" : path, false);
         for (String child : children) {
             String childPath = path + "/" + child;
             if (descriptors.size() == 2) {
