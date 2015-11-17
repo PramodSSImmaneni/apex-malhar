@@ -110,6 +110,7 @@ public class ZooKeeperOffsetManagerTest {
     @Test
     public void testOffsets() {
         ZooKeeperOffsetManager offsetManager = new ZooKeeperOffsetManager();
+        offsetManager.setParentPath("/p1/p2");
         offsetManager.setConnectString(zooKeeperAddress);
         Map<KafkaPartition, Long> offsetsOfPartitions = Maps.newHashMap();
         Random random = new Random();

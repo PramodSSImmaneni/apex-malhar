@@ -99,7 +99,12 @@ public class ZooKeeperOffsetManager implements OffsetManager {
             try {
                 zooKeeperWatcher = new ZooKeeperWatcher();
                 zooKeeper = new ZooKeeper(connectString, sessionTimeout, zooKeeperWatcher);
+                chkCreatePath(parentPath);
             } catch (IOException e) {
+                DTThrowable.rethrow(e);
+            } catch (InterruptedException e) {
+                DTThrowable.rethrow(e);
+            } catch (KeeperException e) {
                 DTThrowable.rethrow(e);
             }
         }
@@ -111,6 +116,16 @@ public class ZooKeeperOffsetManager implements OffsetManager {
         chkCreatePath(sb, kafkaPartition.getTopic());
         chkCreatePath(sb, "" + kafkaPartition.getPartitionId());
         return sb.toString();
+    }
+
+    private void chkCreatePath(String path) throws KeeperException, InterruptedException {
+        String[] elements = path.split("/");
+        StringBuilder sb = new StringBuilder();
+        for (String element : elements) {
+            if (!element.equals("")) {
+                chkCreatePath(sb, element);
+            }
+        }
     }
 
     private void chkCreatePath(StringBuilder pathBuilder, String element) throws KeeperException, InterruptedException {
