@@ -51,6 +51,7 @@ import org.apache.log4j.LogManager;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
+import com.google.common.base.Throwables;
 import com.google.common.collect.Iterables;
 
 import com.datatorrent.api.AutoMetric;
@@ -201,6 +202,8 @@ public abstract class AbstractKafkaInputOperator implements InputOperator,
 
   private WindowDataManager windowDataManager = new WindowDataManager.NoopWindowDataManager();
 
+  private volatile Throwable commitError;
+
   @Override
   public void activate(Context.OperatorContext context)
   {
@@ -274,6 +277,11 @@ public abstract class AbstractKafkaInputOperator implements InputOperator,
 
     if (!consumerWrapper.areKafkaThreadsAreRunning()) {
       throw new RuntimeException("Kafka Consumer threads exited.");
+    }
+
+    if (commitError != null) {
+      logger.error("Error during commit, terminating operator");
+      throw Throwables.propagate(commitError);
     }
   }
 
@@ -439,6 +447,7 @@ public abstract class AbstractKafkaInputOperator implements InputOperator,
     if (e != null) {
       logger.warn("Exceptions in committing offsets {} : {} ",
           Joiner.on(';').withKeyValueSeparator("=").join(map), e);
+      commitError = e;
     }
   }
 
