@@ -24,7 +24,7 @@
   <parent>
     <artifactId>malhar</artifactId>
     <groupId>org.apache.apex</groupId>
-    <version>3.7.1-Offsets-06202017</version>
+    <version>3.7.1-Offsets-07062017</version>
   </parent>
 
   <groupId>org.apache.apex</groupId>
