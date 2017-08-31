@@ -66,11 +66,11 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
   protected String endpointName;
 
 
-  @NotNull
-  protected transient EndpointType endpointType = EndpointType.QUEUE;
+  //@NotNull
+  //protected transient EndpointType endpointType = EndpointType.QUEUE;
   private transient Endpoint endpoint;
   @NotNull
-  public transient FlowCallbackMessageHandler FlowHandler = new FlowCallbackMessageHandler();
+  public transient FlowCallbackMessageHandler flowHandler = new FlowCallbackMessageHandler();
   @NotNull
   protected transient EndpointProperties endpointProperties = new EndpointProperties();
   private transient BytesXMLMessage recentMessage = null;
@@ -94,8 +94,8 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
   private transient int partitionCount = 0;
 
   protected static final transient int DEFAULT_BUFFER_SIZE = 500;
-  protected static transient int DR_COUNTER_SIZE = 2 * DEFAULT_BUFFER_SIZE;
-  protected transient int DR_COUNTER = 0;
+  protected transient int drCounterSize = 2 * DEFAULT_BUFFER_SIZE;
+  protected transient int drCounter = 0;
 
   protected transient volatile boolean doneDups = false;
   protected transient volatile boolean doneDupsPartitioned = true;
@@ -105,10 +105,8 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
 
   public AbstractSolaceGuaranteedIdempotentInputOperator()
   {
-
     throwable = new AtomicReference<Throwable>();
     currentWindowRecoveryState = Maps.newLinkedHashMap();
-
   }
 
 
@@ -135,8 +133,8 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
 
     //super.setUnackedMessageLimit(this.unackedMessageLimit);
     //setup info for HA and DR at the transport level
-    super.setConnectRetries(this.connectRetries);
-    super.setReconnectRetries(this.reconnectRetries);
+    //super.setConnectRetries(this.connectRetries);
+    //super.setReconnectRetries(this.reconnectRetries);
 
 
     super.setup(context);
@@ -145,15 +143,17 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
 
     windowTime = context.getValue(OperatorContext.APPLICATION_WINDOW_COUNT) * context.getValue(DAGContext.STREAMING_WINDOW_SIZE_MILLIS);
 
-    arrivedMessagesToProcess = new ArrayBlockingQueue<BytesXMLMessage>(Integer.parseInt(this.unackedMessageLimit));
+    arrivedMessagesToProcess = new ArrayBlockingQueue<BytesXMLMessage>(unackedMessageLimit);
 
-    unackedMessages = new ArrayBlockingQueue<BytesXMLMessage>((Integer.parseInt(this.unackedMessageLimit)) * (context.getValue(OperatorContext.APPLICATION_WINDOW_COUNT)) * 2);
+    unackedMessages = new ArrayBlockingQueue<BytesXMLMessage>(unackedMessageLimit * (context.getValue(OperatorContext.APPLICATION_WINDOW_COUNT)) * 2);
 
     endpoint = factory.createQueue(this.endpointName);
 
-    if (windowId > idempotentStorageManager.getLargestRecoveryWindow()) {
+    /*
+    if (currentWindowId > idempotentStorageManager.getLargestRecoveryWindow()) {
       super.startConsumer();
     }
+    */
 
     try {
       operatorRecoveredWindows = idempotentStorageManager.getWindowIds(context.getId());
@@ -163,14 +163,11 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
     } catch (IOException e) {
       DTThrowable.rethrow(e);
     }
-
-
   }
 
   @Override
   protected T processMessage(BytesXMLMessage message)
   {
-
     T payload = super.processMessage(message);
     if (payload != null) {
       currentWindowRecoveryState.put(message.getMessageIdLong(), payload);
@@ -183,7 +180,7 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
   public void beginWindow(long windowId)
   {
     //LOG.debug("Largest Recovery Wndow is : {} for current window: {}", idempotentStorageManager.getLargestRecoveryWindow(), windowId);
-    currentWindowId = windowId;
+    super.beginWindow(windowId);
     if (windowId <= idempotentStorageManager.getLargestRecoveryWindow()) {
       //LOG.debug("About to handle recovery, current windowID is: {} largested recovered ID is: {}" + currentWindowId, idempotentStorageManager.getLargestRecoveryWindow());
       handleRecovery(windowId);
@@ -199,7 +196,7 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
   @SuppressWarnings("unchecked")
   protected void handleRecovery(long windowId)
   {
-    LOG.info("++++++++++++++++++ Handle Recovery called");
+    LOG.info("Handle Recovery called");
 
     Map<Long, T> recoveredData;
     try {
@@ -260,7 +257,6 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
       ackCompleted = ackMessages();
       LOG.debug("acking messages completed successfully: " + ackCompleted);
     }
-
   }
 
 
@@ -272,7 +268,7 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
     }
     //If in HA or DR fail-over, block until Solace TCP connection is reestablished so recovery windows are not lost as empty windows
     int sleepCounter = 0;
-    while (super.TCPDisconnected == true) {
+    while (tcpDisconnected) {
       sleepCounter++;
       try {
         Thread.sleep(super.reconnectRetryMillis);
@@ -326,7 +322,7 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
           */
 
           //Operator was not restarted, re-delivered messages are a result of another partitioned operator restart
-          if (message.getRedelivered() && inFlightRecoveryMessages.size() == 0 && currentpartitionCount() > 1 && doneDupsPartitioned == true && donePartitionCheck == false) {
+          if (message.getRedelivered() && inFlightRecoveryMessages.size() == 0 && currentpartitionCount() > 1 && doneDupsPartitioned && donePartitionCheck == false) {
             try {
               doneDupsPartitioned = loadPartitionReplayCheck();
             } catch (IOException e) {
@@ -354,27 +350,27 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
 
 
           // Checking for duplicates after recovery from DR looking for redelivered messages
-          if (super.DRFailover == true && !(message.getRedelivered()) && doneDupsDR == true && donePartitionCheck == false) {
+          if (drFailover && !(message.getRedelivered()) && doneDupsDR && donePartitionCheck == false) {
             try {
               doneDupsDR = loadPartitionReplayCheck();
             } catch (IOException e) {
               DTThrowable.rethrow(e);
             }
             donePartitionCheck = true;
-            DR_COUNTER_SIZE = DR_COUNTER_SIZE + arrivedMessagesToProcess.size();
+            drCounterSize = drCounterSize + arrivedMessagesToProcess.size();
           }
 
 
-          if (inFlightRecoveryMessagesDR.size() == 0 && super.DRFailover == true) {
-            super.DRFailover = false;
+          if (inFlightRecoveryMessagesDR.size() == 0 && drFailover) {
+            drFailover = false;
             doneDupsDR = true;
             donePartitionCheck = false;
             inFlightRecoveryMessagesDR.clear();
             LOG.info("Cleared in flight recovery messages, no more possible duplicate messages detected after DR fail over");
           }
 
-          if (!(message.getRedelivered()) && doneDupsDR == false && inFlightRecoveryMessagesDR.size() > 0 && super.DRFailover == true && DR_COUNTER < DR_COUNTER_SIZE) {
-            DR_COUNTER++;
+          if (!(message.getRedelivered()) && doneDupsDR == false && inFlightRecoveryMessagesDR.size() > 0 && drFailover && drCounter < drCounterSize) {
+            drCounter++;
             T payload = convert(message);
             if (inFlightRecoveryMessagesDR.contains(payload)) {
               LOG.info("Message Duplicate detected after Solace DR fail over");
@@ -387,26 +383,26 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
 
             }
             //Reset DR processing for duplicates after 2 windows worth of message checks
-          } else if (DR_COUNTER == DR_COUNTER_SIZE) {
+          } else if (drCounter == drCounterSize) {
             //Once there are no more duplicates detected there will be no more duplicates due to DR fail over
             doneDupsDR = true;
             donePartitionCheck = false;
             inFlightRecoveryMessagesDR.clear();
-            super.DRFailover = false;
-            DR_COUNTER = 0;
-            DR_COUNTER_SIZE = 2 * DEFAULT_BUFFER_SIZE;
+            drFailover = false;
+            drCounter = 0;
+            drCounterSize = 2 * DEFAULT_BUFFER_SIZE;
             LOG.info("Cleared in flight recovery messages, no more possible duplicate messages detected after DR fail over");
           }
 
 
           if (goodToGo) {
             //if the redelivery flag is no no longer on the messages we can dispose of the inFLightRecoveryMessages
-            if (message.getRedelivered() == false && inFlightRecoveryMessages.size() > 0 && doneDups == true) {
+            if (message.getRedelivered() == false && inFlightRecoveryMessages.size() > 0 && doneDups) {
               inFlightRecoveryMessages.clear();
               LOG.info("Cleared in flight recovery messages, no more redelivered or DR recovery messages");
               doneDups = false;
             }
-            if (message.getRedelivered() == false && inFlightRecoveryMessagesPartition.size() > 0 && doneDupsPartitioned == true) {
+            if (message.getRedelivered() == false && inFlightRecoveryMessagesPartition.size() > 0 && doneDupsPartitioned) {
               inFlightRecoveryMessagesPartition.clear();
               LOG.info("Cleared in flight recovery messages, no more redelivered  messages");
               doneDupsPartitioned = false;
@@ -423,7 +419,6 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
     } catch (InterruptedException e) {
       DTThrowable.rethrow(e);
     }
-
   }
 
   @Override
@@ -483,13 +478,12 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
 
 
     return processedOK;
-
   }
 
   public void setEndpointName(String endpointName)
   {
     this.endpointName = endpointName;
-    LOG.info("+++++++++++++++++++enpointName: {}", this.endpointName);
+    LOG.info("enpointName: {}", this.endpointName);
   }
 
   public int currentpartitionCount()
@@ -512,7 +506,7 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
   @SuppressWarnings("unchecked")
   public boolean loadPartitionReplayCheck() throws IOException
   {
-    if (!(super.DRFailover)) {
+    if (!(drFailover)) {
       LOG.info("Received redelivered message from Solace, another parition must have restarted");
     } else {
       LOG.info("Received DR fail over event from Solace, the partiions are now talking to another Solace Router");
@@ -552,7 +546,7 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
 
         } else {
           for (Map.Entry<Long, T> recoveredEntry : recoveredData.entrySet()) {
-            if (!(super.DRFailover)) {
+            if (!(drFailover)) {
               inFlightRecoveryMessagesPartition.add(recoveredEntry.getValue());
             } else {
               inFlightRecoveryMessagesDR.add(recoveredEntry.getValue());
@@ -571,7 +565,7 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
           //continue;
         } else {
           for (Map.Entry<Long, T> recoveredEntry : recoveredData.entrySet()) {
-            if (!(super.DRFailover)) {
+            if (!(drFailover)) {
               inFlightRecoveryMessagesPartition.add(recoveredEntry.getValue());
             } else {
               inFlightRecoveryMessagesDR.add(recoveredEntry.getValue());
@@ -589,7 +583,7 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
       LOG.info("Added parition data from partition: {}", arrOpIds[i]);
     }
 
-    if (!(super.DRFailover)) {
+    if (!(drFailover)) {
       LOG.info("Total Recovery Partition Data Records: {} ", inFlightRecoveryMessagesPartition.size());
     } else {
       LOG.info("Total Recovery DR fail over Data Records: {}", inFlightRecoveryMessagesDR.size());
@@ -602,13 +596,12 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
   // Start the actual consumption of Solace messages from the Queue
   protected Consumer getConsumer() throws JCSMPException
   {
-
     ConsumerFlowProperties consumerFlowProperties = new ConsumerFlowProperties();
 
     consumerFlowProperties.setAckMode(JCSMPProperties.SUPPORTED_MESSAGE_ACK_CLIENT);
     consumerFlowProperties.setEndpoint(this.endpoint);
 
-    FlowReceiver f_receiver = session.createFlow(FlowHandler, consumerFlowProperties);
+    FlowReceiver f_receiver = session.createFlow(flowHandler, consumerFlowProperties);
     f_receiver.start();
     LOG.info("Flow started on queue: {}", f_receiver.getDestination());
     return f_receiver;
@@ -629,19 +622,20 @@ public abstract class AbstractSolaceGuaranteedIdempotentInputOperator<T> extends
 
   public class FlowCallbackMessageHandler implements XMLMessageListener
   {
-
-
     @Override
     public void onException(JCSMPException e)
     {
       DTThrowable.rethrow(e);
-
     }
 
     @Override
     public void onReceive(BytesXMLMessage message)
     {
-      arrivedMessagesToProcess.add(message);
+      try {
+        arrivedMessagesToProcess.put(message);
+      } catch (InterruptedException e) {
+        DTThrowable.rethrow(e);
+      }
     }
   }
 

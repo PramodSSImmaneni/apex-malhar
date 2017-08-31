@@ -19,9 +19,7 @@
 package org.apache.apex.malhar.solace;
 
 import java.io.IOException;
-import java.util.LinkedList;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
 import javax.validation.constraints.NotNull;
 
 import org.slf4j.Logger;
@@ -42,26 +40,23 @@ import com.solacesystems.jcsmp.XMLMessageListener;
 import com.datatorrent.api.Context;
 import com.datatorrent.api.InputOperator;
 import com.datatorrent.api.Operator;
-import com.datatorrent.api.Operator.CheckpointListener;
 import com.datatorrent.common.util.BaseOperator;
 import com.datatorrent.lib.io.IdempotentStorageManager;
 import com.datatorrent.netlet.util.DTThrowable;
 
 @SuppressWarnings("unused")
 public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator implements
-    InputOperator, Operator.ActivationListener<Context.OperatorContext>, CheckpointListener
+    InputOperator, Operator.ActivationListener<Context.OperatorContext>, Operator.CheckpointNotificationListener
 {
 
   private static final Logger logger = LoggerFactory.getLogger(AbstractSolaceBaseInputOperator.class);
 
   @NotNull
   protected JCSMPProperties properties = new JCSMPProperties();
-  protected String connectRetries;
-  protected String reconnectRetries;
-  protected String unackedMessageLimit;
+  protected int connectRetries;
+  protected int reconnectRetries;
+  protected int unackedMessageLimit;
 
-
-  //protected IdempotentStorageManager idempotentStorageManager = new IdempotentStorageManager.FSIdempotentStorageManager();
   protected FSOpsIdempotentStorageManager idempotentStorageManager = new FSOpsIdempotentStorageManager();
 
   protected transient JCSMPFactory factory;
@@ -71,16 +66,18 @@ public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator im
   protected transient Consumer reliableConsumer;
 
   protected transient int operatorId;
-  protected long windowId;
+  protected transient long currentWindowId;
   protected transient long lastCompletedWId;
 
   protected transient int emitCount;
 
-  protected transient volatile boolean DRFailover = false;
-  protected transient volatile boolean TCPDisconnected = false;
+  protected transient volatile boolean drFailover = false;
+  protected transient volatile boolean tcpDisconnected = false;
 
-  protected transient BlockingQueue<BytesXMLMessage> unackedMessages; // hosts the Solace messages that need to be acked when the streaming window is OK to remove
-  protected LinkedList<Long> inFlightMessageId = new LinkedList<Long>(); //keeps track of all in flight IDs since they are not necessarily sequential
+  //protected transient BlockingQueue<BytesXMLMessage> unackedMessages; // hosts the Solace messages that need to be acked when the streaming window is OK to remove
+  //protected LinkedList<Long> inFlightMessageId = new LinkedList<Long>(); //keeps track of all in flight IDs since they are not necessarily sequential
+  // Messages are received asynchronously and collected in a queue, these are processed by the main operator thread and at that time fault tolerance
+  // and idempotency processing is done so this queue can remain transient
   protected transient ArrayBlockingQueue<BytesXMLMessage> arrivedTopicMessagesToProcess;
 
   //protected transient com.solace.dt.operator.DTSolaceOperatorInputOutput.ArrayBlockingQueue<BytesXMLMessage> arrivedMessagesToProcess;
@@ -89,23 +86,22 @@ public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator im
 
   private transient CallbackMessageHandler cbHandler = new CallbackMessageHandler();
 
-  int spinMillis;
+  protected transient int spinMillis;
 
   protected transient int reconnectRetryMillis = 0;
 
   @Override
   public void setup(Context.OperatorContext context)
   {
-
     operatorId = context.getId();
-    logger.info("OperatorID from Base class: {}", operatorId);
+    logger.debug("OperatorID: {}", operatorId);
     spinMillis = context.getValue(com.datatorrent.api.Context.OperatorContext.SPIN_MILLIS);
     factory = JCSMPFactory.onlyInstance();
 
     //Required for HA and DR to try forever if set to "-1"
     JCSMPChannelProperties channelProperties = (JCSMPChannelProperties)this.properties.getProperty(JCSMPProperties.CLIENT_CHANNEL_PROPERTIES);
-    channelProperties.setConnectRetries(Integer.parseInt(this.connectRetries));
-    channelProperties.setReconnectRetries(Integer.parseInt(this.reconnectRetries));
+    channelProperties.setConnectRetries(this.connectRetries);
+    channelProperties.setReconnectRetries(this.reconnectRetries);
 
     reconnectRetryMillis = channelProperties.getReconnectRetryWaitInMillis();
 
@@ -122,16 +118,17 @@ public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator im
 
     idempotentStorageManager.setup(context);
     lastCompletedWId = idempotentStorageManager.getLargestRecoveryWindow();
-    //logger.debug("++++++++++++++++++++Largest Completed: " + lastCompletedWId);
+    //logger.debug("Largest Completed: " + lastCompletedWId);
+  }
 
-
+  @Override
+  public void beforeCheckpoint(long l)
+  {
   }
 
   @Override
   public void checkpointed(long arg0)
   {
-    // TODO Auto-generated method stub
-
   }
 
   @Override
@@ -154,7 +151,6 @@ public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator im
     return tuple;
   }
 
-
   @Override
   public void activate(Context.OperatorContext context)
   {
@@ -163,7 +159,6 @@ public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator im
       reliableConsumer = session.getMessageConsumer(rcHandler, cbHandler);
       //consumer = getConsumer();
       reliableConsumer.start();
-
     } catch (JCSMPException e) {
       DTThrowable.rethrow(e);
     }
@@ -173,9 +168,11 @@ public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator im
   public void deactivate()
   {
     try {
-      consumer.stop();
-      clearConsumer();
-      consumer.close();
+      if (consumer != null) {
+        consumer.stop();
+        clearConsumer();
+        consumer.close();
+      }
       reliableConsumer.close();
     } catch (JCSMPException e) {
       DTThrowable.rethrow(e);
@@ -185,7 +182,6 @@ public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator im
   @Override
   public void teardown()
   {
-
     idempotentStorageManager.teardown();
     session.closeSession();
   }
@@ -194,9 +190,8 @@ public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator im
   public void beginWindow(long windowId)
   {
     super.beginWindow(windowId);
-    this.windowId = windowId;
+    this.currentWindowId = windowId;
   }
-
 
   protected abstract T convert(BytesXMLMessage message);
 
@@ -209,35 +204,38 @@ public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator im
   public void setProperties(JCSMPProperties properties)
   {
     this.properties = properties;
-
   }
 
+  public JCSMPProperties getProperties()
+  {
+    return properties;
+  }
 
   public IdempotentStorageManager getIdempotentStorageManager()
   {
     return idempotentStorageManager;
   }
 
-  public void setUnackedMessageLimit(String unackedMessageLimit)
+  public void setUnackedMessageLimit(int unackedMessageLimit)
   {
     this.unackedMessageLimit = unackedMessageLimit;
   }
 
-  public String getUnackedMessageLimit()
+  public int getUnackedMessageLimit()
   {
     return unackedMessageLimit;
   }
 
-  public void setConnectRetries(String connectRetries)
+  public void setConnectRetries(int connectRetries)
   {
     this.connectRetries = connectRetries;
-    logger.info("+++++++++++++++++++reconnectRetries: {}", this.connectRetries);
+    logger.debug("connectRetries: {}", this.connectRetries);
   }
 
-  public void setReconnectRetries(String reconnectRetries)
+  public void setReconnectRetries(int reconnectRetries)
   {
     this.reconnectRetries = reconnectRetries;
-    logger.info("+++++++++++++++++++reconnectRetries: {}", this.reconnectRetries);
+    logger.debug("reconnectRetries: {}", this.reconnectRetries);
   }
 
   public void setReapplySubscriptions(boolean state)
@@ -245,7 +243,7 @@ public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator im
     this.properties.setBooleanProperty(JCSMPProperties.REAPPLY_SUBSCRIPTIONS, state);
   }
 
-  public void startConsumer()
+  protected void startConsumer()
   {
     try {
       consumer = getConsumer();
@@ -257,42 +255,36 @@ public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator im
 
   public class ReconnectCallbackHandler implements JCSMPReconnectEventHandler
   {
-
-
     @Override
     public void postReconnect() throws JCSMPException
     {
 
-      logger.info("++++++++++++++Solace client now Reconnected --  possibe Solace HA or DR fail-over +++++++++++++");
-      TCPDisconnected = false;
+      logger.info("Solace client now Reconnected --  possibe Solace HA or DR fail-over");
+      tcpDisconnected = false;
 
     }
 
     @Override
     public boolean preReconnect() throws JCSMPException
     {
-      DRFailover = false;
-      logger.info("++++++++++++++Solace client now in Pre Reconnect state -- possibe Solace HA or DR fail-over +++++++++++++");
-      TCPDisconnected = true;
+      drFailover = false;
+      logger.info("Solace client now in Pre Reconnect state -- possibe Solace HA or DR fail-over");
+      tcpDisconnected = true;
       return true;
     }
-
   }
 
   public class PrintingSessionEventHandler implements SessionEventHandler
   {
-
-
     public void handleEvent(SessionEventArgs event)
     {
       logger.info("Received Session Event %s with info %s\n", event.getEvent(), event.getInfo());
 
       // Received event possibly due to DR fail-ver complete
       if (event.getEvent() == SessionEvent.VIRTUAL_ROUTER_NAME_CHANGED) {
-        DRFailover = true; // may or may not need recovery
-        TCPDisconnected = false;
+        drFailover = true; // may or may not need recovery
+        tcpDisconnected = false;
       }
-
     }
   }
 
@@ -303,17 +295,18 @@ public abstract class AbstractSolaceBaseInputOperator<T> extends BaseOperator im
     public void onException(JCSMPException e)
     {
       DTThrowable.rethrow(e);
-
     }
 
     @Override
     public void onReceive(BytesXMLMessage msg)
     {
-      arrivedTopicMessagesToProcess.add(msg);
-
+      try {
+        arrivedTopicMessagesToProcess.put(msg);
+      } catch (InterruptedException e) {
+        DTThrowable.rethrow(e);
+      }
     }
 
   }
-
 
 }

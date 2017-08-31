@@ -214,6 +214,7 @@
     <module>contrib</module>
     <module>kafka</module>
     <module>examples</module>
+    <module>solace</module>
   </modules>
 
   <dependencies>

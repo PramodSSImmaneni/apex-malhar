@@ -19,12 +19,9 @@
 package org.apache.apex.malhar.solace;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import javax.validation.constraints.NotNull;
 
 import org.slf4j.Logger;
@@ -45,47 +42,45 @@ public abstract class AbstractSolaceDirectInputOperator<T> extends AbstractSolac
 
   private static final Logger LOG = LoggerFactory.getLogger(AbstractSolaceDirectInputOperator.class);
 
-  private final transient AtomicReference<Throwable> throwable;
-  private transient Context.OperatorContext context;
-  protected transient long currentWindowId;
-
   @NotNull
   protected String topicName;
   private transient Topic topic;
-  private transient BytesXMLMessage recentMessage = null;
+  //private transient BytesXMLMessage recentMessage = null;
 
-  private transient List<T> messages = new ArrayList<T>();
+  //private transient List<T> messages = new ArrayList<T>();
   protected final transient Map<Long, T> currentWindowRecoveryState;
-  protected static final transient int DEFAULT_BUFFER_SIZE = 500;
+  protected static final int DEFAULT_BUFFER_SIZE = 500;
 
+  //private final transient AtomicReference<Throwable> throwable;
 
   @Override
   public void setup(Context.OperatorContext context)
   {
-    arrivedTopicMessagesToProcess = new ArrayBlockingQueue<BytesXMLMessage>(Integer.parseInt(this.unackedMessageLimit));
-
-    this.context = context;
+    arrivedTopicMessagesToProcess = new ArrayBlockingQueue<BytesXMLMessage>(this.unackedMessageLimit);
 
     //setup info for HA and DR at the transport level
-    super.setConnectRetries(this.connectRetries);
-    super.setReconnectRetries(this.reconnectRetries);
     super.setReapplySubscriptions(true);
 
     super.setup(context);
-    topic = factory.createTopic(topicName);
-    addSubscription(topic);
   }
 
   public AbstractSolaceDirectInputOperator()
   {
-    throwable = new AtomicReference<Throwable>();
+    //throwable = new AtomicReference<Throwable>();
     currentWindowRecoveryState = Maps.newLinkedHashMap();
+  }
+
+  @Override
+  public void activate(Context.OperatorContext context)
+  {
+    super.activate(context);
+    topic = factory.createTopic(topicName);
+    addSubscription(topic);
   }
 
   @Override
   public void beginWindow(long windowId)
   {
-    currentWindowId = windowId;
     super.beginWindow(windowId);
     if (windowId <= lastCompletedWId) {
       handleRecovery(currentWindowId);
@@ -97,8 +92,8 @@ public abstract class AbstractSolaceDirectInputOperator<T> extends AbstractSolac
   {
     super.endWindow();
     try {
-      if (windowId > lastCompletedWId) {
-        idempotentStorageManager.save(currentWindowRecoveryState, operatorId, windowId);
+      if (currentWindowId > lastCompletedWId) {
+        idempotentStorageManager.save(currentWindowRecoveryState, operatorId, currentWindowId);
       }
       currentWindowRecoveryState.clear();
     } catch (IOException e) {
@@ -123,39 +118,19 @@ public abstract class AbstractSolaceDirectInputOperator<T> extends AbstractSolac
     } catch (InterruptedException e) {
       DTThrowable.rethrow(e);
     }
-    emitCount++;
-
+    //emitCount++;
   }
-
-  /*
-  @Override
-  protected T convert(BytesXMLMessage message) {
-      // TODO Auto-generated method stub
-      return null;
-  }
-  */
-
-  /*
-  @Override
-  protected void emitTuple(T tuple) {
-      // TODO Auto-generated method stub
-
-  }
-  */
-
 
   @Override
   protected Consumer getConsumer() throws JCSMPException
   {
-    // TODO Auto-generated method stub
     return null;
   }
 
   /*
   @Override
-  protected void clearConsumer() throws JCSMPException {
-      // TODO Auto-generated method stub
-
+  protected void clearConsumer() throws JCSMPException
+  {
   }
   */
 
@@ -194,19 +169,18 @@ public abstract class AbstractSolaceDirectInputOperator<T> extends AbstractSolac
   @Override
   protected T processMessage(BytesXMLMessage message)
   {
-
     T payload = super.processMessage(message);
     if (payload != null) {
       currentWindowRecoveryState.put(message.getMessageIdLong(), payload);
     }
-    recentMessage = message;
+    //recentMessage = message;
     return payload;
   }
 
   @SuppressWarnings("unchecked")
   protected void handleRecovery(long windowId)
   {
-    LOG.info("++++++++++++++++++ Handle Recovery called");
+    LOG.info("Handle Recovery called");
 
     Map<Long, T> recoveredData;
     try {
@@ -222,7 +196,6 @@ public abstract class AbstractSolaceDirectInputOperator<T> extends AbstractSolac
     } catch (IOException e) {
       DTThrowable.rethrow(e);
     }
-
   }
 
   public String getTopicName()

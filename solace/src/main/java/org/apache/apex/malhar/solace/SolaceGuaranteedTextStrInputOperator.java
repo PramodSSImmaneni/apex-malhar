@@ -42,7 +42,6 @@ public class SolaceGuaranteedTextStrInputOperator extends AbstractSolaceGuarante
     }
 
     return out;
-
   }
 
   @Override
@@ -56,7 +55,6 @@ public class SolaceGuaranteedTextStrInputOperator extends AbstractSolaceGuarante
   protected void clearConsumer() throws JCSMPException
   {
     // TODO Auto-generated method stub
-
   }
 
 }

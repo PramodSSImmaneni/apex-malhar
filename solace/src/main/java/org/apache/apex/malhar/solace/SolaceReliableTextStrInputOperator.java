@@ -41,7 +41,6 @@ public class SolaceReliableTextStrInputOperator extends AbstractSolaceDirectInpu
     }
 
     return out;
-
   }
 
   @Override
@@ -55,7 +54,6 @@ public class SolaceReliableTextStrInputOperator extends AbstractSolaceDirectInpu
   protected void clearConsumer() throws JCSMPException
   {
     // TODO Auto-generated method stub
-
   }
 
 }
